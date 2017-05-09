@@ -11,8 +11,11 @@ import android.graphics.BitmapFactory;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
 import android.hardware.Camera;
+import android.hardware.usb.UsbDevice;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
+import android.os.Handler;
+import android.os.Message;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.content.ContextCompat;
@@ -22,13 +25,17 @@ import android.view.Display;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
+import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import com.app.flexivendsymbol.R;
 import com.app.flexivendsymbol.helpers.Helper;
 import com.app.flexivendsymbol.helpers.Recognizer;
+import com.app.flexivendsymbol.helpers.UIUtils;
 import com.app.flexivendsymbol.services.RecognizerService;
+import com.er.ERusbsdk.UsbController;
 
 import java.io.ByteArrayOutputStream;
 
@@ -38,12 +45,30 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
     private static final int REQUEST_PERMISSION_CAMERA = 0x01;
 
     private TextView tvResult;
+    private Button btnConnect;
 
+    private boolean cameraConfigured = false;
     private SurfaceHolder surfaceHolder;
     private Camera camera;
     private ResponseReceiver responseReceiver;
 
-    private boolean cameraConfigured = false;
+    private UsbController usbController;
+    private UsbDevice usbDevice;
+    private Handler usbHandler = new Handler(new Handler.Callback() {
+        @Override
+        public boolean handleMessage(Message msg) {
+            switch (msg.what) {
+                case UsbController.USB_CONNECTED:
+                    btnConnect.setEnabled(false);
+                    btnConnect.setText(R.string.UsbConnected);
+                    startPreview();
+                    break;
+                default:
+                    break;
+            }
+            return true;
+        }
+    });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -56,6 +81,26 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
         // Map view elements to class members.
         SurfaceView surfaceView = (SurfaceView) findViewById(R.id.surfaceView);
         tvResult = (TextView) findViewById(R.id.tvResult);
+        btnConnect = (Button) findViewById(R.id.btnConnect);
+
+        // Wrap event handlers to view elements.
+        btnConnect.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                usbController.close();
+                usbDevice = usbController.getUsbDev();
+
+                if (usbDevice != null) {
+                    if (!(usbController.isHasPermission(usbDevice))) {
+                        usbController.getPermission(usbDevice);
+                    } else {
+                        btnConnect.setEnabled(false);
+                        btnConnect.setText(R.string.UsbConnected);
+                        UIUtils.showToast(getApplicationContext(), R.string.msg_AccessSuccess);
+                    }
+                }
+            }
+        });
 
         if (!checkCameraHardware(this)) {
             Toast.makeText(this, "Camera is not available!", Toast.LENGTH_LONG).show();
@@ -71,6 +116,9 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
 
             // deprecated setting, but required on Android versions prior to 3.0
             surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+
+            // Setup usb controller.
+            usbController = new UsbController(this, usbHandler);
         }
     }
 
@@ -135,7 +183,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
             try {
                 camera.setPreviewDisplay(surfaceHolder);
             } catch (Throwable t) {
-                Toast.makeText(this, t.getMessage(), Toast.LENGTH_LONG).show();
+                UIUtils.showToast(this, t.getMessage());
             }
 
             camera.setPreviewCallback(this);
@@ -201,9 +249,6 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
 
     @Override
     public void onPreviewFrame(byte[] data, Camera camera) {
-        onTrimMemory(TRIM_MEMORY_COMPLETE);
-        onTrimMemory(TRIM_MEMORY_MODERATE);
-
         Camera.Parameters params = camera.getParameters();
         int width = params.getPreviewSize().width;
         int height = params.getPreviewSize().height;
@@ -234,10 +279,40 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
             return;
         }
 
+        sendTextToPrinter(code);
+
         Intent intent = new Intent(this, ChooseCupActivity.class);
         intent.putExtra(ChooseCupActivity.KEY_SYMBOL_CODE, tvResult.getText().toString());
         startActivity(intent);
         finish();
+    }
+
+    //check access permission?
+    private boolean checkUsbPermission() {
+        if (usbDevice != null) {
+            if (usbController.isHasPermission(usbDevice)) {
+                return true;
+            }
+        }
+        btnConnect.setEnabled(true);
+        btnConnect.setText(R.string.Connect);
+        UIUtils.showToast(getApplicationContext(), R.string.msg_AccessFail);
+        return false;
+    }
+
+    private void sendTextToPrinter(String code) {
+        byte printStatus = usbController.revByte(usbDevice);
+        if (printStatus == 0x38) {
+            UIUtils.showToast(getApplicationContext(), R.string.paper_stat);
+            return;
+        }
+        if (checkUsbPermission()) {
+            byte[] cmd_resume = new byte[4];
+            cmd_resume[0] = 0x1B;
+            cmd_resume[1] = 0x40; // reset command
+            usbController.sendByte(cmd_resume, usbDevice);
+            usbController.sendMsg(code, "GBK", usbDevice);
+        }
     }
 
     public class ResponseReceiver extends BroadcastReceiver {
