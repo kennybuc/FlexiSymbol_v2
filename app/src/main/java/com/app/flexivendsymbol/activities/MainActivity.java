@@ -316,7 +316,7 @@ public class MainActivity extends AppCompatActivity implements SurfaceHolder.Cal
             cmd_resume[0] = 0x1B;
             cmd_resume[1] = 0x40; // reset command
             usbController.sendByte(cmd_resume, usbDevice);
-            usbController.sendByte(new byte[]{0x1D, 0x21, 0x11}, usbDevice);
+            usbController.sendByte(new byte[]{0x1D, 0x21, 0x22}, usbDevice);
             usbController.sendMsg(code, "GBK", usbDevice);
         }
     }
